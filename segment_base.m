@@ -35,51 +35,72 @@ segSetTrain = transform(segSetTrainRaw, @(x) {imresize(x{1}, targetSize, 'neares
 segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'nearest')});
 
 numClasses = 3;
+net = dlnetwork;
 
-% apply weighting to the images - there's a lot of background!
+% apply weighting
 tbl          = countEachLabel(segSetTrainRaw);                                                                                                                                                           
 frequency    = tbl.PixelCount / sum(tbl.PixelCount);                                                                                                                                                  
 classWeights = median(frequency) ./ frequency;  
 
-layers = [
+encode_layers = [
     imageInputLayer(inputSize)
 
-    convolution2dLayer(3, 16, 'Padding', 1)
-    reluLayer() 
-    batchNormalizationLayer()
+    convolution2dLayer(3, 16, 'Padding', 1, 'Name', 'conv_1')
+    batchNormalizationLayer("Name","batch_norm_1")
+    reluLayer("Name","relu_1") 
     maxPooling2dLayer(2, 'Stride',2)
 
-    convolution2dLayer(3, 32, 'Padding', 1)
-    reluLayer() 
-    batchNormalizationLayer()
+    convolution2dLayer(3, 32, 'Padding', 1, 'Name', 'conv_2')
+    batchNormalizationLayer("Name","batch_norm_2")
+    reluLayer("Name","relu_2") 
     maxPooling2dLayer(2, 'Stride',2)
 
-    convolution2dLayer(3, 64, 'Padding', 1)
-    reluLayer()
-    batchNormalizationLayer()
-    maxPooling2dLayer(2, 'Stride',2)
-
-    transposedConv2dLayer(4, 64, 'Stride',2, 'Cropping', 1)
-    reluLayer()
-    batchNormalizationLayer()
-
-    transposedConv2dLayer(4, 32, 'Stride',2, 'Cropping', 1)
-    reluLayer()
-    batchNormalizationLayer()
-
-    transposedConv2dLayer(4, 16, 'Stride',2, 'Cropping', 1)
-    reluLayer()
-    batchNormalizationLayer()
-
-    convolution2dLayer(1, numClasses);
-    softmaxLayer()
-    pixelClassificationLayer('Classes', classNames,'ClassWeights', classWeights )
+    convolution2dLayer(3, 64, 'Padding', 1, 'Name', 'conv_3')
+    batchNormalizationLayer("Name","batch_norm_3")
+    reluLayer("Name","relu_3") 
+    maxPooling2dLayer(2, 'Stride',2, "Name","pool_conn")
 
 ]
+net = addLayers(net, encode_layers);
+
+decode_layers = [
+    transposedConv2dLayer(4, 64, 'Stride',2, 'Cropping', 1, 'Name', 'conv_4')
+        depthConcatenationLayer(2, 'Name', 'concat1')
+
+    batchNormalizationLayer("Name","batch_norm_4")
+    reluLayer("Name","relu_4") 
+
+    transposedConv2dLayer(4, 32, 'Stride',2, 'Cropping', 1, 'Name', 'conv_5')
+        depthConcatenationLayer(2, 'Name', 'concat2')
+
+    batchNormalizationLayer("Name","batch_norm_5")
+    reluLayer("Name","relu_5") 
+
+    transposedConv2dLayer(4, 16, 'Stride',2, 'Cropping', 1, 'Name', 'conv_6')
+    depthConcatenationLayer(2, 'Name', 'concat3')
+
+    batchNormalizationLayer("Name","batch_norm_6")
+    reluLayer("Name","relu_6") 
+
+    convolution2dLayer(1, numClasses, 'Name', 'conv_7');
+    softmaxLayer()
+    %pixelClassificationLayer('Classes', classNames,'ClassWeights', classWeights )
+
+];
+
+net = addLayers(net, decode_layers);
+net = connectLayers(net, "pool_conn", "conv_4");
+net = connectLayers(net, "relu_1", "concat3/in2");
+net = connectLayers(net, "relu_2", "concat2/in2");
+net = connectLayers(net, "relu_3", "concat1/in2");
+
+figure;
+plot(net);
+
 
 opts = trainingOptions('sgdm', ...
    'InitialLearnRate',1e-2, ...
-   'MaxEpochs',20,...
+   'MaxEpochs',10,...
    'MiniBatchSize',2, ...
    'LearnRateSchedule','piecewise',...
    'LearnRateDropPeriod',6, ...
@@ -88,21 +109,23 @@ opts = trainingOptions('sgdm', ...
    );
 
 trainingData = combine(imgSetTrain, segSetTrain);
-trainNewModel = true;                                                                                                                           
+trainNewModel = false;                                                                                                                           
                                                                                                                                                                                                         
-  if trainNewModel                                                                                                                                                                                      
-      net = trainNetwork(trainingData, layers, opts);                                                                                                                                                   
-      save('segmentnet_base', 'net');                                                                                                                                                                   
-  else                                                                                                                                                                                                  
-      load('segmentnet_base', 'net');                                                                                                                                                                   
-  end 
+if trainNewModel                                                                                                                                                                                      
+  %net = trainNetwork(trainingData, layers, opts);  
+  net = trainnet(trainingData, net,'crossentropy', opts);
+  save('segmentnet_base', 'net');                                                                                                                                                                   
+else                                                                                                                                                                                                  
+  load('segmentnet_base', 'net');                                                                                                                                                                   
+end 
 
 pxdsResultsRaw = semanticseg(imgSetTest, net, 'WriteLocation', pwd);
 pxdsResults = transform(pxdsResultsRaw, @(x) {imresize(x{1}, [966 1296], 'nearest')});
+pxdsResults = transform(pxdsResults, @(x) {renamecats(x{1}, classNames)}); 
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
 
-testImg = readimage(imgSetTestRaw, 7);
-predSeg = readimage(pxdsResultsRaw, 7);
+testImg = readimage(imgSetTestRaw, 1);
+predSeg = readimage(pxdsResultsRaw, 1);
 predSeg = imresize(predSeg, [966 1296], 'nearest');
 figure;
 imshow(labeloverlay(testImg, predSeg));
