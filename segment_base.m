@@ -32,27 +32,32 @@ segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'neares
 numClasses = 3;
 net = dlnetwork;
 
-% apply weighting
-
-
 encode_layers = [
     imageInputLayer(inputSize, Normalization="none")
 
+    convolution2dLayer(3, 16, 'Padding', 1, 'Name', 'conv_1int')
+    batchNormalizationLayer("Name","batch_norm_1int")
+    reluLayer("Name","relu_int1") 
     convolution2dLayer(3, 16, 'Padding', 1, 'Name', 'conv_1')
     batchNormalizationLayer("Name","batch_norm_1")
     reluLayer("Name","relu_1") 
     maxPooling2dLayer(2, 'Stride',2)
 
+    convolution2dLayer(3, 32, 'Padding', 1, 'Name', 'conv_2int')
+    batchNormalizationLayer("Name","batch_norm_2int")
+    reluLayer("Name","relu_int2") 
     convolution2dLayer(3, 32, 'Padding', 1, 'Name', 'conv_2')
     batchNormalizationLayer("Name","batch_norm_2")
     reluLayer("Name","relu_2") 
     maxPooling2dLayer(2, 'Stride',2)
-
+    
+    convolution2dLayer(3, 64, 'Padding', 1, 'Name', 'conv_3int')
+    batchNormalizationLayer("Name","batch_norm_3int")
+    reluLayer("Name","relu_int3") 
     convolution2dLayer(3, 64, 'Padding', 1, 'Name', 'conv_3')
     batchNormalizationLayer("Name","batch_norm_3")
     reluLayer("Name","relu_3") 
     maxPooling2dLayer(2, 'Stride',2, "Name","pool_conn")
-
 ];
 net = addLayers(net, encode_layers);
 
@@ -83,8 +88,6 @@ decode_layers = [
 
     convolution2dLayer(1, numClasses, 'Name', 'conv_7');
     softmaxLayer
-    %pixelClassificationLayer('Classes', classNames,'ClassWeights', classWeights )
-
 ];
 
 net = addLayers(net, decode_layers);
@@ -93,32 +96,24 @@ net = connectLayers(net, "relu_1", "concat3/in2");
 net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
-%figure;
-%plot(net);
-
 opts = trainingOptions('sgdm', ...
    'InitialLearnRate',1e-2, ...
-   'MaxEpochs',10,...
-   'MiniBatchSize',2, ...
+   'MaxEpochs',50,...
+   'MiniBatchSize',4, ...
    'LearnRateSchedule','piecewise',...
     'LearnRateDropPeriod',6, ...
     'LearnRateDropFactor',0.5 ...
    );
+
 trainingData = combine(imgSetTrain, segSetTrain);
-trainNewModel = false;  
+trainNewModel = true;  
 
 if trainNewModel                                                                                                                                                                                      
-  %lossfunc = @(Y,T)crossentropy(Y,T,classWeights,'WeightsFormat','C');
-
   tbl          = countEachLabel(segSetTrainRaw);                                                                                                                                                           
   frequency    = tbl.PixelCount / sum(tbl.PixelCount);                                                                                                                                                  
   classWeights = 1 ./ sqrt(frequency)
-  %classWeights = [0.2, 1, 0.5]
-    
   W = reshape(classWeights, 1, 1, 3, 1);                                                                                                  
   lossfunc = @(Y,T) -mean(W .* T .* log(Y + 1e-8), 'all'); 
-
-  %lossfunc = @(Y,T) -mean(T .* log(Y + 1e-8), 'all')
   net = trainnet(trainingData, net,lossfunc, opts);
   save('segmentnet_base', 'net');                                                                                                                                                                   
 else                                                                                                                                                                                                  
