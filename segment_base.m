@@ -33,7 +33,7 @@ numClasses = 3;
 net = dlnetwork;
 
 encode_layers = [
-    imageInputLayer(inputSize, Normalization="none")
+    imageInputLayer(inputSize, Normalization="zscore")
 
     convolution2dLayer(3, 16, 'Padding', 1, 'Name', 'conv_1int')
     batchNormalizationLayer("Name","batch_norm_1int")
@@ -58,7 +58,15 @@ encode_layers = [
     batchNormalizationLayer("Name","batch_norm_3")
     reluLayer("Name","relu_3") 
     maxPooling2dLayer(2, 'Stride',2, "Name","pool_conn")
+
+
 ];
+%    convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_1')
+%    batchNormalizationLayer("Name","batch_bn_1int")
+%    reluLayer("Name","relu_intbn") 
+%    convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_2')
+%    batchNormalizationLayer("Name","batch_bn_1")
+%    reluLayer("Name","relu_bn") 
 net = addLayers(net, encode_layers);
 
 decode_layers = [
@@ -106,15 +114,25 @@ opts = trainingOptions('sgdm', ...
    );
 
 trainingData = combine(imgSetTrain, segSetTrain);
-trainNewModel = true;  
+trainNewModel = false;  
+
+function loss = diceLoss(Y, T, W)
+    smooth = 1e-6;
+    intersection = sum(Y .* T, [1 2]);
+    union = sum(Y, [1 2]) + sum(T, [1 2]);
+    dice = (2 * intersection + smooth) ./ (union + smooth);
+    d_loss = 1 - mean(dice, 'all');
+    
+    ce_loss = -mean(W .* T .* log(Y + 1e-8), 'all');
+    loss = d_loss + ce_loss;
+end
 
 if trainNewModel                                                                                                                                                                                      
   tbl          = countEachLabel(segSetTrainRaw);                                                                                                                                                           
   frequency    = tbl.PixelCount / sum(tbl.PixelCount);                                                                                                                                                  
   classWeights = 1 ./ sqrt(frequency)
-  W = reshape(classWeights, 1, 1, 3, 1);                                                                                                  
-  lossfunc = @(Y,T) -mean(W .* T .* log(Y + 1e-8), 'all'); 
-  net = trainnet(trainingData, net,lossfunc, opts);
+  W = reshape(classWeights, 1, 1, 3, 1); 
+  net = trainnet(trainingData, net,@(Y,T) diceLoss(Y,T,W), opts);
   save('segmentnet_base', 'net');                                                                                                                                                                   
 else                                                                                                                                                                                                  
   load('segmentnet_base', 'net');                                                                                                                                                                   
