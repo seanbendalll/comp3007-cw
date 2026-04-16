@@ -20,15 +20,20 @@ targetSize = [240,320];
 inputSize = [240 320 3]; % [height width no_channels]
 
 % divide into train and test sets (need to do validation at some point?)
-imgSetTrainRaw = subset(imds, 1:40);
+% see ref #1
+imgSetTrainRaw = subset(imds, 1:34);
+imgSetValidateRaw = subset(imds, 35:40);
 imgSetTestRaw = subset(imds, 41:50);
 imgSetTrain = transform(imgSetTrainRaw,@(x) imresize(x,targetSize));
+imgSetValidate = transform(imgSetValidateRaw, @(x) imresize(x, targetSize));
 imgSetTest = transform(imgSetTestRaw,@(x) imresize(x,targetSize));
 
 % do the same for the segmentation sets
-segSetTrainRaw = subset(pxds, 1:40);
+segSetTrainRaw = subset(pxds, 1:34);
+segSetValidateRaw = subset(pxds, 35:40);
 segSetTestRaw = subset(pxds, 41:50);
-segSetTrain = transform(segSetTrainRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});                                                    
+segSetTrain = transform(segSetTrainRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});     
+segSetValidate = transform(segSetValidateRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});
 segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'nearest')});
 
 % see ref #4 - a lot of inspiration taken from constructing the CNN as a 
@@ -121,6 +126,10 @@ net = connectLayers(net, "relu_1", "concat3/in2");
 net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
+trainingData = combine(imgSetTrain, segSetTrain);
+validationData = combine(imgSetValidate, segSetValidate);
+trainNewModel = true;  
+
 % training hyperparameters, working these out was a pain
 % contention between SGDM with 1e-2 or adam with 1e-3.
 opts = trainingOptions('adam', ...
@@ -128,10 +137,12 @@ opts = trainingOptions('adam', ...
    'MaxEpochs',50,...
    'MiniBatchSize',4, ...
    'LearnRateSchedule','piecewise',...
-    'LearnRateDropPeriod',6, ...
-    'LearnRateDropFactor',0.5 ...
+    'LearnRateDropPeriod',10, ...
+    'LearnRateDropFactor',0.5, ...
+    'ValidationData',validationData,...
+    'ValidationFrequency',8,...
+    'ValidationPatience',8 ...
    );
-
 
 % see ref #7 - made the choice of multiple loss functions, need to optimise
 % how they are used/defined for readability - this was haphazardly put
@@ -145,18 +156,17 @@ function customLossFunction = diceAndCE(predictions, truths, frequencies)
     classWeights = 1 ./ sqrt(frequencies);
     classWeights = reshape(classWeights, 1, 1, []);
 
-    % calculate dice loss
+    % calculate dice loss - ref #9
     dice = 1 - mean(generalizedDice(predictions, truths), "all");
 
     % calculate CE loss
-    ce = -mean(classWeights .* truths .* log(predictions),"all");
+    ce = -mean(classWeights .* truths .* log(predictions + 1e-8),"all");
 
     % add them together
-    customLossFunction = ce + dice;
+    customLossFunction = 0.5*dice + 0.5*ce;
 end
 
-trainingData = combine(imgSetTrain, segSetTrain);
-trainNewModel = true;  
+
 
 % model training! if we want a new model, train it, otherwise we can use
 % for evaluation of previously trained models.
