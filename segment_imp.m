@@ -125,11 +125,17 @@ net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
 % formulate training and validation data
-trainingData = combine(imgSetTrain, segSetTrain);
+
+% for improved network, this is where the augmentation takes place
+originalTrainingData = combine(imgSetTrain, segSetTrain);
+extraFlippedData = transform(originalTrainingData, @(data) {fliplr(data{1}), fliplr(data{2})});
+extraFlippedData2 = transform(originalTrainingData, @(data) {flipud(data{1}), flipud(data{2})});
+trainingData = combine(originalTrainingData, extraFlippedData, extraFlippedData2, ReadOrder='sequential');
 validationData = combine(imgSetValidate, segSetValidate);
 
-% change this to true when you want to train a new model (est. 3-4 minutes)
-trainNewModel = false;  
+% work out how many elements are in new training data set
+% numel(originalTrainingData.readall)
+% numel(trainingData.readall)
 
 % training hyperparameters, working these out was a pain
 % contention between SGDM with 1e-2 or adam with 1e-3.
@@ -138,11 +144,11 @@ opts = trainingOptions('adam', ...
    'MaxEpochs',50,...
    'MiniBatchSize',4, ...
    'LearnRateSchedule','piecewise',...
-    'LearnRateDropPeriod',10, ...
-    'LearnRateDropFactor',0.5, ...
-    'ValidationData',validationData,...
-    'ValidationFrequency',8,...
-    'ValidationPatience',8 ...
+   'LearnRateDropPeriod',10, ...
+   'LearnRateDropFactor',0.5, ...
+   'ValidationData',validationData,...
+   'ValidationFrequency',8,...
+   'ValidationPatience',8 ...
    );
 
 % see ref #7 - made the choice of multiple loss functions, need to optimise
@@ -167,65 +173,93 @@ function customLossFunction = diceAndCE(predictions, truths, frequencies)
     customLossFunction = 0.5*dice + 0.5*ce;
 end
 
+% change this to true when you want to train a new model (est. 3-4 minutes)
+trainNewModel = false;  
+
 % model training! if we want a new model, train it, otherwise we can use
 % for evaluation of previously trained models.
 if trainNewModel                                                                                                                                                                                      
   tbl          = countEachLabel(segSetTrainRaw);                                                                                                                                                           
   frequency    = tbl.PixelCount / sum(tbl.PixelCount);   
   net = trainnet(trainingData, net, @(predictions, truths) diceAndCE(predictions, truths, frequency), opts);
-  save('segmentnet_base', 'net');                                                                                                                                                                   
+  save('segmentnet_imp', 'net');   
+  netImp = net;
+  load('segmentnet_base', 'net');
+  netBase = net;
 else                                                                                                                                                                                                  
-  load('segmentnet_base', 'net');                                                                                                                                                                   
+  load('segmentnet_imp', 'net');
+  netImp = net;
+  load('segmentnet_base', 'net');
+  netBase = net;
 end 
 
 % perform the segmentation, for each image segment, very slight upscale,
 % then write labelled image to segmentationResults directory
 
-outputDir = fullfile(pwd, 'segmentationResults');
+outputDir = fullfile(pwd, 'segmentationImprovedResults');
+baseDir = fullfile(pwd, 'segmentationResults');
 if ~exist(outputDir, 'dir'); mkdir(outputDir); end
 
 i = 1;
 while hasdata(imgSetTest)
+    % improved
     img = read(imgSetTest);                          
-    predSmall = semanticseg(img, net);              
+    predSmall = semanticseg(img, netImp);              
     predFull = imresize(predSmall, [966 1296], 'nearest');
     imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(outputDir, sprintf('prediction_%02d.png', i)));
+
     i = i + 1;
 end
 
 % read results back in after they've been generated
 pxdsResults = pixelLabelDatastore(outputDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
+pxdsBaseResults = pixelLabelDatastore(baseDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
 
 % evaluate the segmentation.
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
+metrics2 = evaluateSemanticSegmentation(pxdsBaseResults, segSetTestRaw);
 perClassMetrics = metrics.ClassMetrics;
-disp('Each of the classes.');
+disp('Improved Network: Class Metrics');
+disp('-------------------------------------');
 disp(perClassMetrics);
+perClassMetrics2 = metrics2.ClassMetrics;
+disp('Base Network: Class Metrics');
+disp('-------------------------------------');
+disp(perClassMetrics2);
+
 % specificImageMetrics = metrics.ImageMetrics;
 % disp('Specific metrics relating to images.');
 % disp(specificImageMetrics);
+
 figure;
 tiledlayout(1,2, 'TileSpacing', 'compact', 'Padding', 'compact');
 nexttile;
 cm = confusionchart(metrics.ConfusionMatrix.Variables, classNames, Normalization="row-normalized");
 cm.Title = "Normalised Confusion Matrix";
 nexttile;
-cm2 = confusionchart(metrics.ConfusionMatrix.Variables, classNames);
-cm2.Title = "Non-normalised Confusion Matrix";
+cm2 = confusionchart(metrics2.ConfusionMatrix.Variables, classNames, Normalization="row-normalized");
+cm2.Title = "Normalised Base Confusion Matrix";
 
 figure;
 numImages = 5;
 % instead of using typical subplots used tiledlayout - easier
-tiledlayout(numImages, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+tiledlayout(numImages, 4, 'TileSpacing', 'compact', 'Padding', 'compact');
 for i = 1:numImages
     nexttile;
     img = readimage(imgSetTestRaw, i);
     imshow(img);
+    if i == 1; title('Original Image'); end;
     nexttile;
     predSeg = readimage(pxdsResults, i);
     %predSeg = imresize(predSeg, [966 1296], 'nearest');
     imshow(labeloverlay(img, predSeg));
+    if i == 1; title('Improved Segmentation'); end;
+    nexttile;
+    predSeg = readimage(pxdsBaseResults, i);
+    imshow(labeloverlay(img, predSeg));
     segTruth = readimage(segSetTestRaw, i);
+    if i == 1; title('Base Segmentation'); end;
     nexttile;
     imshow(labeloverlay(img, segTruth));
+    if i == 1; title('Truth Segmentation'); end;
 end
