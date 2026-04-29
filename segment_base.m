@@ -128,7 +128,7 @@ net = connectLayers(net, "relu_3", "concat1/in2");
 
 trainingData = combine(imgSetTrain, segSetTrain);
 validationData = combine(imgSetValidate, segSetValidate);
-trainNewModel = true;  
+trainNewModel = false;  
 
 % training hyperparameters, working these out was a pain
 % contention between SGDM with 1e-2 or adam with 1e-3.
@@ -186,21 +186,30 @@ pxdsResults = transform(pxdsResults, @(x) {renamecats(x{1}, classNames)});
 
 % evaluate the segmentation.
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
-
+perClassMetrics = metrics.ClassMetrics;
+disp('Each of the classes.');
+disp(perClassMetrics);
+% specificImageMetrics = metrics.ImageMetrics;
+% disp('Specific metrics relating to images.');
+% disp(specificImageMetrics);
 figure;
 cm = confusionchart(metrics.ConfusionMatrix.Variables, classNames, Normalization="row-normalized");
 cm.Title = "Normalised Confusion Matrix";
 
-% visualise some results
-testImg = readimage(imgSetTestRaw, 3);
-predSeg = readimage(pxdsResultsRaw, 3);
-predSeg = imresize(predSeg, [966 1296], 'nearest');
 figure;
-imshow(labeloverlay(testImg, predSeg));
-title('Overlay image!');
-
-figure;
-imshow(testImg);
-title('Test Image!');
-
-
+numImages = 5;
+% found this command on MATLAB docs - didn't add to ref as very small part.
+tiledlayout(numImages, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+for i = 1:numImages
+    nexttile;
+    img = readimage(imgSetTestRaw, i);
+    imshow(img);
+    nexttile;
+    predSeg = readimage(pxdsResultsRaw, i);
+    predSeg = imresize(predSeg, [966 1296], 'nearest');
+    imshow(labeloverlay(img, predSeg));
+    segTruth = readimage(segSetTestRaw, i);
+    nexttile;
+    imshow(labeloverlay(img, segTruth));
+    
+end

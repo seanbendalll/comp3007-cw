@@ -33,7 +33,7 @@ segSetTrainRaw = subset(pxds, 1:34);
 segSetValidateRaw = subset(pxds, 35:40);
 segSetTestRaw = subset(pxds, 41:50);
 segSetTrain = transform(segSetTrainRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});     
-segSetValidate = tranform(segSetValidateRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});
+segSetValidate = transform(segSetValidateRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});
 segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'nearest')});
 
 % see ref #4 - a lot of inspiration taken from constructing the CNN as a 
@@ -126,6 +126,10 @@ net = connectLayers(net, "relu_1", "concat3/in2");
 net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
+trainingData = combine(imgSetTrain, segSetTrain);
+validationData = combine(imgSetValidate, segSetValidate);
+trainNewModel = false;  
+
 % training hyperparameters, working these out was a pain
 % contention between SGDM with 1e-2 or adam with 1e-3.
 opts = trainingOptions('adam', ...
@@ -134,9 +138,11 @@ opts = trainingOptions('adam', ...
    'MiniBatchSize',4, ...
    'LearnRateSchedule','piecewise',...
     'LearnRateDropPeriod',10, ...
-    'LearnRateDropFactor',0.5 ...
+    'LearnRateDropFactor',0.5, ...
+    'ValidationData',validationData,...
+    'ValidationFrequency',8,...
+    'ValidationPatience',8 ...
    );
-
 
 % see ref #7 - made the choice of multiple loss functions, need to optimise
 % how they are used/defined for readability - this was haphazardly put
@@ -160,8 +166,7 @@ function customLossFunction = diceAndCE(predictions, truths, frequencies)
     customLossFunction = 0.5*dice + 0.5*ce;
 end
 
-trainingData = combine(imgSetTrain, segSetTrain);
-trainNewModel = true;  
+
 
 % model training! if we want a new model, train it, otherwise we can use
 % for evaluation of previously trained models.
@@ -182,20 +187,33 @@ pxdsResults = transform(pxdsResults, @(x) {renamecats(x{1}, classNames)});
 % evaluate the segmentation.
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
 
+% evaluation metrics
+perClassMetrics = metrics.ClassMetrics;
+disp('Each of the classes.');
+disp(perClassMetrics);
+% specificImageMetrics = metrics.ImageMetrics;
+% disp('Specific metrics relating to images.');
+% disp(specificImageMetrics);
 figure;
 cm = confusionchart(metrics.ConfusionMatrix.Variables, classNames, Normalization="row-normalized");
 cm.Title = "Normalised Confusion Matrix";
 
 % visualise some results
-testImg = readimage(imgSetTestRaw, 3);
-predSeg = readimage(pxdsResultsRaw, 3);
-predSeg = imresize(predSeg, [966 1296], 'nearest');
+numImages = numel(imgSetTestRaw.Files);
+dispSize = ceil(sqrt(numImages))
 figure;
-imshow(labeloverlay(testImg, predSeg));
-title('Overlay image!');
+for i = 1:numImages
+    img = readimage(imgSetTestRaw, i);
+    subplot(gridSize, gridSz)
+   
+end
 
-figure;
-imshow(testImg);
-title('Test Image!');
-
-
+% testImg = readimage(imgSetTestRaw, 3);
+% predSeg = readimage(pxdsResultsRaw, 3);
+% predSeg = imresize(predSeg, [966 1296], 'nearest');
+% figure;
+% imshow(labeloverlay(testImg, predSeg));
+% title('Overlay image!');
+% figure;
+% imshow(testImg);
+% title('Test Image!');
