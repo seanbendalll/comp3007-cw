@@ -17,10 +17,6 @@ pxds = pixelLabelDatastore('cw/cw_data/segmentation',classNames,pixelLabelID);
 targetSize = [240,320];
 
 % resize images and divide into training and test sets
-inputSize = [240 320 3]; % [height width no_channels]
-
-% divide into train and test sets (need to do validation at some point?)
-% see ref #1
 imgSetTrainRaw = subset(imds, 1:34);
 imgSetValidateRaw = subset(imds, 35:40);
 imgSetTestRaw = subset(imds, 41:50);
@@ -41,6 +37,7 @@ segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'neares
 % unet style skipping layers
 numClasses = 3;
 net = dlnetwork;
+inputSize = [240 320 3];
 
 encode_layers = [
     imageInputLayer(inputSize, Normalization="zscore")
@@ -71,7 +68,7 @@ encode_layers = [
     reluLayer("Name","relu_3") 
     maxPooling2dLayer(2, 'Stride',2, "Name","pool_conn")
 
-   % bottleneck layer
+   % bottleneck layer to sit at bottom of unet
    convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_1')
    batchNormalizationLayer("Name","batch_bn_1int")
    reluLayer("Name","relu_intbn") 
@@ -84,6 +81,7 @@ encode_layers = [
    dropoutLayer(0.3, "Name","dropout")
 ]; 
 
+% see dlnetwork addLayers function
 net = addLayers(net, encode_layers);
 
 decode_layers = [
@@ -126,8 +124,11 @@ net = connectLayers(net, "relu_1", "concat3/in2");
 net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
+% formulate training and validation data
 trainingData = combine(imgSetTrain, segSetTrain);
 validationData = combine(imgSetValidate, segSetValidate);
+
+% change this to true when you want to train a new model (est. 3-4 minutes)
 trainNewModel = false;  
 
 % training hyperparameters, working these out was a pain
@@ -166,8 +167,6 @@ function customLossFunction = diceAndCE(predictions, truths, frequencies)
     customLossFunction = 0.5*dice + 0.5*ce;
 end
 
-
-
 % model training! if we want a new model, train it, otherwise we can use
 % for evaluation of previously trained models.
 if trainNewModel                                                                                                                                                                                      
@@ -179,10 +178,8 @@ else
   load('segmentnet_base', 'net');                                                                                                                                                                   
 end 
 
-% perform the segmentation!
-% pxdsResultsRaw = semanticseg(imgSetTest, net, 'WriteLocation', pwd);
-% pxdsResults = transform(pxdsResultsRaw, @(x) {imresize(x{1}, [966 1296], 'nearest')});
-% pxdsResults = transform(pxdsResults, @(x) {renamecats(x{1}, classNames)}); 
+% perform the segmentation, for each image segment, very slight upscale,
+% then write labelled image to segmentationResults directory
 
 outputDir = fullfile(pwd, 'segmentationResults');
 if ~exist(outputDir, 'dir'); mkdir(outputDir); end
@@ -195,8 +192,9 @@ while hasdata(imgSetTest)
     imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(outputDir, sprintf('prediction_%02d.png', i)));
     i = i + 1;
 end
-pxdsResults = pixelLabelDatastore(outputDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
 
+% read results back in after they've been generated
+pxdsResults = pixelLabelDatastore(outputDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
 
 % evaluate the segmentation.
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
@@ -217,7 +215,7 @@ cm2.Title = "Non-normalised Confusion Matrix";
 
 figure;
 numImages = 5;
-% found this command on MATLAB docs - didn't add to ref as very small part.
+% instead of using typical subplots used tiledlayout - easier
 tiledlayout(numImages, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
 for i = 1:numImages
     nexttile;
@@ -230,5 +228,4 @@ for i = 1:numImages
     segTruth = readimage(segSetTestRaw, i);
     nexttile;
     imshow(labeloverlay(img, segTruth));
-    
 end
