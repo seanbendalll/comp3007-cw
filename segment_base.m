@@ -180,9 +180,23 @@ else
 end 
 
 % perform the segmentation!
-pxdsResultsRaw = semanticseg(imgSetTest, net, 'WriteLocation', pwd);
-pxdsResults = transform(pxdsResultsRaw, @(x) {imresize(x{1}, [966 1296], 'nearest')});
-pxdsResults = transform(pxdsResults, @(x) {renamecats(x{1}, classNames)}); 
+% pxdsResultsRaw = semanticseg(imgSetTest, net, 'WriteLocation', pwd);
+% pxdsResults = transform(pxdsResultsRaw, @(x) {imresize(x{1}, [966 1296], 'nearest')});
+% pxdsResults = transform(pxdsResults, @(x) {renamecats(x{1}, classNames)}); 
+
+outputDir = fullfile(pwd, 'segmentationResults');
+if ~exist(outputDir, 'dir'); mkdir(outputDir); end
+
+i = 1;
+while hasdata(imgSetTest)
+    img = read(imgSetTest);                          
+    predSmall = semanticseg(img, net);              
+    predFull = imresize(predSmall, [966 1296], 'nearest');
+    imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(outputDir, sprintf('prediction_%02d.png', i)));
+    i = i + 1;
+end
+pxdsResults = pixelLabelDatastore(outputDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
+
 
 % evaluate the segmentation.
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
@@ -193,8 +207,13 @@ disp(perClassMetrics);
 % disp('Specific metrics relating to images.');
 % disp(specificImageMetrics);
 figure;
+tiledlayout(1,2, 'TileSpacing', 'compact', 'Padding', 'compact');
+nexttile;
 cm = confusionchart(metrics.ConfusionMatrix.Variables, classNames, Normalization="row-normalized");
 cm.Title = "Normalised Confusion Matrix";
+nexttile;
+cm2 = confusionchart(metrics.ConfusionMatrix.Variables, classNames);
+cm2.Title = "Non-normalised Confusion Matrix";
 
 figure;
 numImages = 5;
@@ -205,8 +224,8 @@ for i = 1:numImages
     img = readimage(imgSetTestRaw, i);
     imshow(img);
     nexttile;
-    predSeg = readimage(pxdsResultsRaw, i);
-    predSeg = imresize(predSeg, [966 1296], 'nearest');
+    predSeg = readimage(pxdsResults, i);
+    %predSeg = imresize(predSeg, [966 1296], 'nearest');
     imshow(labeloverlay(img, predSeg));
     segTruth = readimage(segSetTestRaw, i);
     nexttile;
