@@ -129,7 +129,7 @@ trainingData = combine(imgSetTrain, segSetTrain);
 validationData = combine(imgSetValidate, segSetValidate);
 
 % change this to true when you want to train a new model (est. 3-4 minutes)
-trainNewModel = true;  
+trainNewModel = false;  
 
 % training hyperparameters, working these out was a pain
 % contention between SGDM with 1e-2 or adam with 1e-3.

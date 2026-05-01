@@ -69,10 +69,10 @@ encode_layers = [
     maxPooling2dLayer(2, 'Stride',2, "Name","pool_conn")
 
    % bottleneck layer to sit at bottom of unet
-   convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_1')
+   convolution2dLayer(3, 256, 'Padding', 1, 'Name', 'bottleneck_1')
    batchNormalizationLayer("Name","batch_bn_1int")
    reluLayer("Name","relu_intbn") 
-   convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_2')
+   convolution2dLayer(3, 256, 'Padding', 1, 'Name', 'bottleneck_2')
    batchNormalizationLayer("Name","batch_bn_1")
    reluLayer("Name","relu_bn")
 
@@ -125,63 +125,41 @@ net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
 % formulate training and validation data
-
 % for improved network, this is where the augmentation takes place
-originalTrainingData = combine(imgSetTrain, segSetTrain);
-extraFlippedData = transform(originalTrainingData, @(data) {fliplr(data{1}), fliplr(data{2})});
-extraFlippedData2 = transform(originalTrainingData, @(data) {flipud(data{1}), flipud(data{2})});
-trainingData = combine(originalTrainingData, extraFlippedData, extraFlippedData2, ReadOrder='sequential');
+trainingData = transform(combine(imgSetTrain, segSetTrain), @augmentData);
 validationData = combine(imgSetValidate, segSetValidate);
 
 % work out how many elements are in new training data set
 % numel(originalTrainingData.readall)
-% numel(trainingData.readall)
+% nnumel(trainingData.readall)
 
 % training hyperparameters, working these out was a pain
 % contention between SGDM with 1e-2 or adam with 1e-3.
 opts = trainingOptions('adam', ...
    'InitialLearnRate',1e-3, ...
-   'MaxEpochs',50,...
+   'MaxEpochs',100,...
    'MiniBatchSize',4, ...
    'LearnRateSchedule','piecewise',...
    'LearnRateDropPeriod',10, ...
    'LearnRateDropFactor',0.5, ...
    'ValidationData',validationData,...
-   'ValidationFrequency',8,...
-   'ValidationPatience',8 ...
+   'ValidationFrequency',4,...
+   'ValidationPatience',30, ...
+   'Plots','training-progress', ...
+   'Metrics','accuracy',...
+   'Shuffle','every-epoch'...
    );
 
-% see ref #7 - made the choice of multiple loss functions, need to optimise
-% how they are used/defined for readability - this was haphazardly put
-% together and I'm not sure if its right
-function customLossFunction = diceAndCE(predictions, truths, frequencies)
-    % frequencies - used to calculate weighting
-    % predictions - our softmax normalised predictions
-    % truths - the actual classification of the pixels
-
-    % calculate the weights
-    classWeights = 1 ./ sqrt(frequencies);
-    classWeights = reshape(classWeights, 1, 1, []);
-
-    % calculate dice loss - ref #9
-    dice = 1 - mean(generalizedDice(predictions, truths), "all");
-
-    % calculate CE loss
-    ce = -mean(classWeights .* truths .* log(predictions + 1e-8),"all");
-
-    % add them together
-    customLossFunction = 0.5*dice + 0.5*ce;
-end
-
 % change this to true when you want to train a new model (est. 3-4 minutes)
-trainNewModel = false;  
+trainNewModel = true;  
 
 % model training! if we want a new model, train it, otherwise we can use
 % for evaluation of previously trained models.
 if trainNewModel                                                                                                                                                                                      
   tbl          = countEachLabel(segSetTrainRaw);                                                                                                                                                           
   frequency    = tbl.PixelCount / sum(tbl.PixelCount);   
-  net = trainnet(trainingData, net, @(predictions, truths) diceAndCE(predictions, truths, frequency), opts);
+  net = trainnet(trainingData, net, @(predictions, truths) diceAndFocal(predictions, truths, frequency), opts);
+  
   save('segmentnet_imp', 'net');   
   netImp = net;
   load('segmentnet_base', 'net');
@@ -195,14 +173,12 @@ end
 
 % perform the segmentation, for each image segment, very slight upscale,
 % then write labelled image to segmentationResults directory
-
 outputDir = fullfile(pwd, 'segmentationImprovedResults');
 baseDir = fullfile(pwd, 'segmentationResults');
 if ~exist(outputDir, 'dir'); mkdir(outputDir); end
 
 i = 1;
 while hasdata(imgSetTest)
-    % improved
     img = read(imgSetTest);                          
     predSmall = semanticseg(img, netImp);              
     predFull = imresize(predSmall, [966 1296], 'nearest');
@@ -226,10 +202,6 @@ perClassMetrics2 = metrics2.ClassMetrics;
 disp('Base Network: Class Metrics');
 disp('-------------------------------------');
 disp(perClassMetrics2);
-
-% specificImageMetrics = metrics.ImageMetrics;
-% disp('Specific metrics relating to images.');
-% disp(specificImageMetrics);
 
 figure;
 tiledlayout(1,2, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -262,4 +234,67 @@ for i = 1:numImages
     nexttile;
     imshow(labeloverlay(img, segTruth));
     if i == 1; title('Truth Segmentation'); end;
+end
+
+% HELPER FUNCTIONS
+
+% see ref #7 - made the choice of multiple loss functions, need to optimise
+% how they are used/defined for readability - this was haphazardly put
+% together and I'm not sure if its right
+function customLossFunction = diceAndFocal(predictions, truths, frequencies)
+    % frequencies - used to calculate weighting
+    % predictions - our softmax normalised predictions
+    % truths - the actual classification of the pixels
+
+    % calculate the weights
+    %classWeights = 1 ./ sqrt(frequencies);
+    classWeights = median(frequencies) ./ frequencies;
+    classWeights = reshape(classWeights, 1, 1, []);
+
+    % calculate dice loss - ref #9
+    dice = 1 - mean(generalizedDice(predictions, truths), "all");
+    
+    % focal loss
+    gamma = 1.5;
+    pt = sum(predictions .* truths, 3);  
+    alpha_t = sum(classWeights .* truths, 3);
+    focal = -mean(alpha_t .* (1 - pt).^gamma .* log(pt + 1e-8), "all");
+
+    % add them together
+    customLossFunction = 0.6*dice + 0.4*focal;
+end
+
+% initial augmentation boilerplate - not used yet
+function output = augmentData(images)
+    
+    image = images{1};
+    segmentation = images{2};
+    
+    % left right flip
+    if rand < 0.5
+        image = fliplr(image);
+        segmentation = fliplr(segmentation);
+    end
+
+    % up down flip
+    if rand < 0.5
+        image = flipud(image);
+        segmentation = flipud(segmentation);
+    end
+
+    img = im2single(image);
+    
+    % brightness
+    if rand < 0.4
+        img = img + (rand*0.2 - 0.1);  
+    end
+    
+    % contrast
+    if rand < 0.3
+        img = (img - 0.5) * (0.8 + rand*0.4) + 0.5; 
+    end
+    
+    img = im2uint8(min(max(img, 0), 1));
+    image = img;
+    output = {image, segmentation};
 end
