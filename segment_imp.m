@@ -13,28 +13,33 @@ pxds = pixelLabelDatastore('cw/cw_data/segmentation',classNames,pixelLabelID);
 
 % resize images to reduce computational time in training the network
 % original size: 966x1296
-% resized: 240x320
+% resized: 240x320 (1/4 of the size)
 targetSize = [240,320];
 
-% resize images and divide into training and test sets
-imgSetTrainRaw = subset(imds, 1:34);
-imgSetValidateRaw = subset(imds, 35:40);
-imgSetTestRaw = subset(imds, 41:50);
+% set the rng seed to be the same each time (used in tandem with the
+% segment_base). use 42 as it's pretty standard across randomising models.
+rng(42);
+randomIndexes = randperm(50);
+
+% resize images and divide into training, test and val sets.
+imgSetTrainRaw = subset(imds, randomIndexes(1:34));
+imgSetValidateRaw = subset(imds, randomIndexes(35:40));
+imgSetTestRaw = subset(imds, randomIndexes(41:50));
 imgSetTrain = transform(imgSetTrainRaw,@(x) imresize(x,targetSize));
 imgSetValidate = transform(imgSetValidateRaw, @(x) imresize(x, targetSize));
 imgSetTest = transform(imgSetTestRaw,@(x) imresize(x,targetSize));
 
 % do the same for the segmentation sets
-segSetTrainRaw = subset(pxds, 1:34);
-segSetValidateRaw = subset(pxds, 35:40);
-segSetTestRaw = subset(pxds, 41:50);
+segSetTrainRaw = subset(pxds, randomIndexes(1:34));
+segSetValidateRaw = subset(pxds, randomIndexes(35:40));
+segSetTestRaw = subset(pxds, randomIndexes(41:50));
 segSetTrain = transform(segSetTrainRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});     
 segSetValidate = transform(segSetValidateRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});
 segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'nearest')});
 
-% see ref #4 - a lot of inspiration taken from constructing the CNN as a 
+% a lot of inspiration taken from constructing the CNN as a 
 % graph rather than a linear structure - allows us to implement
-% unet style skipping layers
+% unet style skipping layers and other topological benefits
 numClasses = 3;
 net = dlnetwork;
 inputSize = [240 320 3];
@@ -42,8 +47,7 @@ inputSize = [240 320 3];
 encode_layers = [
     imageInputLayer(inputSize, Normalization="zscore")
 
-    % each "layer" composed as a unet layer, 2 convs and matching BN and
-    % relu. see ref #2+3
+    % each "layer" composed as a unet layer, 2 convs and matching BN
     convolution2dLayer(3, 16, 'Padding', 1, 'Name', 'conv_1int')
     batchNormalizationLayer("Name","batch_norm_1int")
     reluLayer("Name","relu_int1") 
@@ -69,16 +73,15 @@ encode_layers = [
     maxPooling2dLayer(2, 'Stride',2, "Name","pool_conn")
 
    % bottleneck layer to sit at bottom of unet
-   convolution2dLayer(3, 256, 'Padding', 1, 'Name', 'bottleneck_1')
+   convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_1')
    batchNormalizationLayer("Name","batch_bn_1int")
    reluLayer("Name","relu_intbn") 
-   convolution2dLayer(3, 256, 'Padding', 1, 'Name', 'bottleneck_2')
+   convolution2dLayer(3, 128, 'Padding', 1, 'Name', 'bottleneck_2')
    batchNormalizationLayer("Name","batch_bn_1")
    reluLayer("Name","relu_bn")
 
-   % dropout to reduce overfitting - noticed in ref #2 and elaborated on in
-   % ref #8
-   dropoutLayer(0.3, "Name","dropout")
+   % dropout to reduce overfitting - heavier dropout here as augmentation
+   dropoutLayer(0.4, "Name","dropout")
 ]; 
 
 % see dlnetwork addLayers function
@@ -125,19 +128,15 @@ net = connectLayers(net, "relu_2", "concat2/in2");
 net = connectLayers(net, "relu_3", "concat1/in2");
 
 % formulate training and validation data
-% for improved network, this is where the augmentation takes place
+% for improved network, this is where the augmentation takes place ONLY on
+% training data, not on validation data.
 trainingData = transform(combine(imgSetTrain, segSetTrain), @augmentData);
 validationData = combine(imgSetValidate, segSetValidate);
 
-% work out how many elements are in new training data set
-% numel(originalTrainingData.readall)
-% nnumel(trainingData.readall)
-
-% training hyperparameters, working these out was a pain
-% contention between SGDM with 1e-2 or adam with 1e-3.
+% training hyperparameters
 opts = trainingOptions('adam', ...
    'InitialLearnRate',1e-3, ...
-   'MaxEpochs',100,...
+   'MaxEpochs',50,...
    'MiniBatchSize',4, ...
    'LearnRateSchedule','piecewise',...
    'LearnRateDropPeriod',10, ...
@@ -145,9 +144,9 @@ opts = trainingOptions('adam', ...
    'ValidationData',validationData,...
    'ValidationFrequency',4,...
    'ValidationPatience',30, ...
+   'OutputNetwork', 'best-validation-loss',...
    'Plots','training-progress', ...
-   'Metrics','accuracy',...
-   'Shuffle','every-epoch'...
+   'Metrics','accuracy'...
    );
 
 % change this to true when you want to train a new model (est. 3-4 minutes)
@@ -171,19 +170,24 @@ else
   netBase = net;
 end 
 
-% perform the segmentation, for each image segment, very slight upscale,
-% then write labelled image to segmentationResults directory
+% open results directory for both imp and base.
 outputDir = fullfile(pwd, 'segmentationImprovedResults');
 baseDir = fullfile(pwd, 'segmentationResults');
 if ~exist(outputDir, 'dir'); mkdir(outputDir); end
 
 i = 1;
 while hasdata(imgSetTest)
+    % imrpoved
     img = read(imgSetTest);                          
     predSmall = semanticseg(img, netImp);              
     predFull = imresize(predSmall, [966 1296], 'nearest');
     imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(outputDir, sprintf('prediction_%02d.png', i)));
-
+    
+    % base
+    predSmall = semanticseg(img, netBase);
+    predFull = imresize(predSmall, [966 1296], 'nearest');
+    imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(baseDir, sprintf('prediction_%02d.png', i)));
+    
     i = i + 1;
 end
 
@@ -191,7 +195,7 @@ end
 pxdsResults = pixelLabelDatastore(outputDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
 pxdsBaseResults = pixelLabelDatastore(baseDir, classNames, {[0 0 0], [255 0 0], [0 255 0]});
 
-% evaluate the segmentation.
+% evaluate the segmentation against test sets
 metrics = evaluateSemanticSegmentation(pxdsResults, segSetTestRaw);
 metrics2 = evaluateSemanticSegmentation(pxdsBaseResults, segSetTestRaw);
 perClassMetrics = metrics.ClassMetrics;
@@ -203,6 +207,7 @@ disp('Base Network: Class Metrics');
 disp('-------------------------------------');
 disp(perClassMetrics2);
 
+% display conf matrixes for both
 figure;
 tiledlayout(1,2, 'TileSpacing', 'compact', 'Padding', 'compact');
 nexttile;
@@ -212,6 +217,7 @@ nexttile;
 cm2 = confusionchart(metrics2.ConfusionMatrix.Variables, classNames, Normalization="row-normalized");
 cm2.Title = "Normalised Base Confusion Matrix";
 
+% display a set of results to see how well we did.
 figure;
 numImages = 5;
 % instead of using typical subplots used tiledlayout - easier
@@ -223,7 +229,6 @@ for i = 1:numImages
     if i == 1; title('Original Image'); end;
     nexttile;
     predSeg = readimage(pxdsResults, i);
-    %predSeg = imresize(predSeg, [966 1296], 'nearest');
     imshow(labeloverlay(img, predSeg));
     if i == 1; title('Improved Segmentation'); end;
     nexttile;
@@ -238,63 +243,77 @@ end
 
 % HELPER FUNCTIONS
 
-% see ref #7 - made the choice of multiple loss functions, need to optimise
-% how they are used/defined for readability - this was haphazardly put
-% together and I'm not sure if its right
+% see loss function ref - in improved upgraded to FOCAL rather than CE, AND
+% used median frequency for imbalance 
 function customLossFunction = diceAndFocal(predictions, truths, frequencies)
     % frequencies - used to calculate weighting
-    % predictions - our softmax normalised predictions
+    % predictions - our normalised predictions
     % truths - the actual classification of the pixels
 
     % calculate the weights
-    %classWeights = 1 ./ sqrt(frequencies);
     classWeights = median(frequencies) ./ frequencies;
     classWeights = reshape(classWeights, 1, 1, []);
 
-    % calculate dice loss - ref #9
+    % calculate dice loss
     dice = 1 - mean(generalizedDice(predictions, truths), "all");
     
-    % focal loss
-    gamma = 1.5;
+    % calclate focal loss
+    gamma = 2;
     pt = sum(predictions .* truths, 3);  
     alpha_t = sum(classWeights .* truths, 3);
     focal = -mean(alpha_t .* (1 - pt).^gamma .* log(pt + 1e-8), "all");
 
-    % add them together
-    customLossFunction = 0.6*dice + 0.4*focal;
+    % add them together with heavier weighting on dice
+    customLossFunction = 0.7*dice + 0.3*focal;
 end
 
-% initial augmentation boilerplate - not used yet
+% augmentation function
 function output = augmentData(images)
     
     image = images{1};
     segmentation = images{2};
     
+    % geometric transformations
     % left right flip
-    if rand < 0.5
-        image = fliplr(image);
-        segmentation = fliplr(segmentation);
-    end
+    if rand < 0.5; image = fliplr(image); segmentation = fliplr(segmentation); end
 
     % up down flip
+    if rand < 0.5; image = flipud(image); segmentation = flipud(segmentation); end
+    
+
+    % photometric transformations
+    img = rgb2hsv(im2single(image)); % image has to be in HSV rather than RGB
+    
+    % jitters: a lot of the images base on colour, so photometric
+    % approaches are strong here.
+
+    % jitter hue with a prob of 0.6
+    if rand < 0.6
+      img(:,:,1) = mod(img(:,:,1) + (rand * 0.06 - 0.03), 1.0);
+    end
+    
+    % jitter saturation with prob of 0.5
     if rand < 0.5
-        image = flipud(image);
-        segmentation = flipud(segmentation);
+      img(:,:,2) = img(:,:,2) * (0.7 + rand * 0.6);  % saturation jitter
+      img(:,:,2) = min(img(:,:,2), 1.0);
     end
 
-    img = im2single(image);
-    
-    % brightness
+    % convert back to RGB
+    img = hsv2rgb(img);
+
+    % gamma correction in range 0.7 to 1.3
     if rand < 0.4
-        img = img + (rand*0.2 - 0.1);  
+        gamma = 0.7 + rand * 0.6;  
+        img = img .^ gamma;
     end
-    
-    % contrast
+
     if rand < 0.3
-        img = (img - 0.5) * (0.8 + rand*0.4) + 0.5; 
+      img = imnoise(img, 'gaussian', 0, 0.002);
     end
-    
+
+    % convert back to img
     img = im2uint8(min(max(img, 0), 1));
     image = img;
+
     output = {image, segmentation};
 end

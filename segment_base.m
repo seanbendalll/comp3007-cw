@@ -16,18 +16,21 @@ pxds = pixelLabelDatastore('cw/cw_data/segmentation',classNames,pixelLabelID);
 % resized: 240x320
 targetSize = [240,320];
 
+rng(42);
+randomIndexes = randperm(50);
+
 % resize images and divide into training and test sets
-imgSetTrainRaw = subset(imds, 1:34);
-imgSetValidateRaw = subset(imds, 35:40);
-imgSetTestRaw = subset(imds, 41:50);
+imgSetTrainRaw = subset(imds, randomIndexes(1:34));
+imgSetValidateRaw = subset(imds, randomIndexes(35:40));
+imgSetTestRaw = subset(imds, randomIndexes(41:50));
 imgSetTrain = transform(imgSetTrainRaw,@(x) imresize(x,targetSize));
 imgSetValidate = transform(imgSetValidateRaw, @(x) imresize(x, targetSize));
 imgSetTest = transform(imgSetTestRaw,@(x) imresize(x,targetSize));
 
 % do the same for the segmentation sets
-segSetTrainRaw = subset(pxds, 1:34);
-segSetValidateRaw = subset(pxds, 35:40);
-segSetTestRaw = subset(pxds, 41:50);
+segSetTrainRaw = subset(pxds, randomIndexes(1:34));
+segSetValidateRaw = subset(pxds, randomIndexes(35:40));
+segSetTestRaw = subset(pxds, randomIndexes(41:50));
 segSetTrain = transform(segSetTrainRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});     
 segSetValidate = transform(segSetValidateRaw, @(x) {imresize(x{1}, targetSize, 'nearest')});
 segSetTest  = transform(segSetTestRaw,  @(x) {imresize(x{1}, targetSize, 'nearest')});
@@ -141,8 +144,8 @@ opts = trainingOptions('adam', ...
     'LearnRateDropPeriod',10, ...
     'LearnRateDropFactor',0.5, ...
     'ValidationData',validationData,...
-    'ValidationFrequency',8,...
-    'ValidationPatience',8, ...
+    'ValidationFrequency',4,...
+    'ValidationPatience',30, ...
     'Plots','training-progress',...
     'Metrics','accuracy',...
     'Shuffle','every-epoch'...
