@@ -150,7 +150,7 @@ opts = trainingOptions('adam', ...
    );
 
 % change this to true when you want to train a new model (est. 3-4 minutes)
-trainNewModel = true;  
+trainNewModel = false;  
 
 % model training! if we want a new model, train it, otherwise we can use
 % for evaluation of previously trained models.
@@ -175,19 +175,29 @@ outputDir = fullfile(pwd, 'segmentationImprovedResults');
 baseDir = fullfile(pwd, 'segmentationResults');
 if ~exist(outputDir, 'dir'); mkdir(outputDir); end
 
+fullSize = [966 1296];
 i = 1;
 while hasdata(imgSetTest)
-    % imrpoved
-    img = read(imgSetTest);                          
-    predSmall = semanticseg(img, netImp);              
-    predFull = imresize(predSmall, [966 1296], 'nearest');
+    img = read(imgSetTest);
+
+    % instead of just resizing images back to original resolution, we can
+    % exploit bilinear sampling to upsample them back 4x bigger than
+    % before.
+
+    % improved - get the scores then bilinearly interpolate to resize
+    [~, ~, scoresImp] = semanticseg(img, netImp);
+    scoresUp = imresize(scoresImp, fullSize);          
+    [~, predIdx] = max(scoresUp, [], 3);
+    predFull = categorical(double(predIdx), 1:numClasses, cellstr(classNames));
     imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(outputDir, sprintf('prediction_%02d.png', i)));
-    
-    % base
-    predSmall = semanticseg(img, netBase);
-    predFull = imresize(predSmall, [966 1296], 'nearest');
+
+    % base - same as for improved.
+    [~, ~, scoresBase] = semanticseg(img, netBase);
+    scoresUp = imresize(scoresBase, fullSize);
+    [~, predIdx] = max(scoresUp, [], 3);
+    predFull = categorical(double(predIdx), 1:numClasses, cellstr(classNames));
     imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(baseDir, sprintf('prediction_%02d.png', i)));
-    
+
     i = i + 1;
 end
 

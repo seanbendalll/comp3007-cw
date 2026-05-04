@@ -190,11 +190,16 @@ end
 outputDir = fullfile(pwd, 'segmentationResults');
 if ~exist(outputDir, 'dir'); mkdir(outputDir); end
 
+
+fullSize = [966 1296];
 i = 1;
 while hasdata(imgSetTest)
-    img = read(imgSetTest);                          
-    predSmall = semanticseg(img, net);              
-    predFull = imresize(predSmall, [966 1296], 'nearest');
+    % base - bilinear interpolation rather than just resize.
+    img = read(imgSetTest);
+    [~, ~, scoresBase] = semanticseg(img, net);
+    scoresUp = imresize(scoresBase, fullSize);
+    [~, predIdx] = max(scoresUp, [], 3);
+    predFull = categorical(double(predIdx), 1:numClasses, cellstr(classNames));
     imwrite(label2rgb(uint8(predFull), [0 0 0; 1 0 0; 0 1 0]), fullfile(outputDir, sprintf('prediction_%02d.png', i)));
     i = i + 1;
 end
