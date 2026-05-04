@@ -2,14 +2,14 @@ close all;
 clear;
 
 % load our unsegmented images into an image store
-imds = imageDatastore('cw/cw_data/images/');
+imds = imageDatastore('cw_data/images/');
 
 % for our images, red is weed, green is crop, and black is the background
 classNames = ["background" "weed" "crop"];
 pixelLabelID = {[0 0 0], [255 0 0], [0 255 0]};
 
 % load our ground truths into a pixel label data store
-pxds = pixelLabelDatastore('cw/cw_data/segmentation',classNames,pixelLabelID);
+pxds = pixelLabelDatastore('cw_data/segmentation',classNames,pixelLabelID);
 
 % resize images to reduce computational time in training the network
 % original size: 966x1296
